@@ -8,12 +8,10 @@ address = "/home/ray/Code/machine-learning/projects/capstone/data/svhn/full/test
 base = "/home/ray/Code/Google-Street-View-House-Numbers-Digit-Localization/cascades/cascade"
 outputFile = "./newCPUPython.txt"
 
-#ratios = [1.0, 2.0]  # original ratios
-#ratios = [1, 2]  # good for A111_1.jpg
-ratios = [0.5, 1]  # good for A203.jpg A206.jpg
-imNo = 0
-#x_enlarge = 1
-#y_enlarge = 1
+#RATIOS = [1.0, 2.0]  # original ratios
+MAX_NUM = 5
+RATIOS = [1, 2]  # good for A111_1.jpg
+#RATIOS = [0.5, 1]  # good for A203.jpg A206.jpg
 
 
 
@@ -24,10 +22,6 @@ class Box:
 		self.width = w;
 		self.height = h;
 
-	# 以 Box 的　x 轴中心点作为比较的　key
-	#def __cmp__(self, other):
-	#	return (self.left+self.width/2) < (other.left+other.width/2)
-
 	def area(self):
 		return self.width * self.height
 
@@ -36,69 +30,6 @@ class Box:
 
 	def br(self):
 		return (self.left+self.width, self.top+self.height)
-
-
-def write(digit_list, confidence, imNo):
-	mini = 4
-	f = open(outputFile, 'a')
-
-	# sort two list according confidence
-	# from small to large
-	for i in range(len(digit_list)):
-		for j in range(len(digit_list)):
-			if confidence[j] < confidence[i]:
-				digit_list[i], digit_list[j] = digit_list[j], digit_list[i]
-				confidence[i], confidence[j] = confidence[j], confidence[i]
-
-
-	digit_len = len(digit_list)
-	f.write(str(imNo)+' '+str(min(digit_len, mini)))
-
-	# Error?
-	# The elements with smaller confidence is in head
-	# What we want to get is the element with largest confidence
-	for i in range(digit_len):
-		format_str = ' ' + str(digit_list[i].left) + \
-					 ' ' + str(digit_list[i].top) + \
-					 ' ' + str(digit_list[i].width) + \
-					 ' ' + str(digit_list[i].height)
-		f.write(format_str)
-		if i >= mini-1:
-			break;
-	f.write('\n')
-	f.close()
-
-			
-
-# The way of 'sigma' being computed can be replaced by the standard derivative function
-def stats(numList):
-	length = len(numList)
-	sumq = np.sum(numList)
-	sumsq = np.sum(np.square(numList))
-
-	mu = sumq/length
-	sigma = math.sqrt((sumsq/length)-(mu*mu))
-
-	print(mu, sigma)
-	return mu, sigma
-
-
-def area_filter(all_digits, dist = 0.75):
-	wTimesh = []
-	for each_digit in all_digits:
-		wTimesh.append(each_digit.width * each_digit.height)
-	wTimesh = np.array(wTimesh)
-
-	#mu = np.mean(wTimesh)
-	#sigma = np.sum(wTimesh)
-	mu, sigma = stats(wTimesh)
-
-	filter_digits = []
-	for each_digit in all_digits:
-		if math.fabs(each_digit.height*each_digit.width - mu) <= (dist*sigma+25):
-			filter_digits.append(each_digit)
-
-	return filter_digits
 
 
 def Overlap(box1, box2):
@@ -119,6 +50,68 @@ def Overlap(box1, box2):
 	return Box(left, top, right-left, bottom-top)
 
 
+def write(digit_list, imNo, outputFile):
+	mini = 4
+	f = open(outputFile, 'a')
+
+
+	digit_len = len(digit_list)
+	f.write(str(imNo)+' '+str(digit_len))
+
+	for i in range(digit_len):
+		format_str = ' ' + str(digit_list[i].left) + \
+					 ' ' + str(digit_list[i].top) + \
+					 ' ' + str(digit_list[i].width) + \
+					 ' ' + str(digit_list[i].height)
+		f.write(format_str)
+	f.write('\n')
+	f.close()
+
+			
+
+# The way of 'sigma' being computed can be replaced by the standard derivative function
+def stats(numList):
+	length = len(numList)
+	sumq = np.sum(numList)
+	sumsq = np.sum(np.square(numList))
+
+	mu = sumq/length
+	sigma = math.sqrt((sumsq/length)-(mu*mu))
+
+	return mu, sigma
+
+
+
+# @func: 使用正态分布将处于边缘的 height*width 的区域过滤掉
+# @param:
+#      all_digits -- 保存了所有检测到的数字区域的坐标（包括 false positive）
+#      dist -- float，相当于正态分布的一个概率阈值
+# @return: 根据概率分布过滤后的数字区域
+def area_filter(all_digits, dist = 0.75):
+	wTimesh = []
+	for each_digit in all_digits:
+		wTimesh.append(each_digit.width * each_digit.height)
+	wTimesh = np.array(wTimesh)
+
+	#mu = np.mean(wTimesh)
+	#sigma = np.sum(wTimesh)
+	mu, sigma = stats(wTimesh)
+
+	filter_digits = []
+	for each_digit in all_digits:
+		if math.fabs(each_digit.height*each_digit.width - mu) <= (dist*sigma+25):
+			filter_digits.append(each_digit)
+
+	return filter_digits
+
+
+# @func: 所有区域按重叠程度合并（聚簇），合并条件为　重叠区域面积达到原始区域面积一半
+# @param: 
+#      filter_digits -- 使用概率分布过滤掉一些异常区域后的数字矩阵
+# @return: 
+#	   combined_digits --　合并后的区域列表
+#	   confidence -- 合并次数组成列表，每个元素对应 combined_digits　的一个区域。 
+#					　一个区域合并的次数越多，存在数字的可能越低
 def cluster(filter_digits):
 	cc = 1.0
 	combined_digits = []
@@ -142,29 +135,43 @@ def cluster(filter_digits):
 
 			# left, top, width, height
 			tmp = Box(int(avg_left), int(avg_top), int(avg_right-avg_left), int(avg_bottom-avg_top))
-			print(avg_left, avg_top, avg_right-avg_left, avg_bottom-avg_top)
 			cc = cc+1
 		else:
 			combined_digits.append(tmp)
 			tmp = filter_digits[i]
 			
-			# the more rectangles being combined, the 
-			# highter the confidence that overlapped area owned
+			# 越多区域被合并，该区域的 confidence 就越大
 			confidence.append(cc)
-			print('Rectangles clustered count: ' + str(cc))
 			cc = 1
 
 	combined_digits.append(tmp)
 	confidence.append(cc)
-	print('Rectangles clustered count: ' + str(cc))
 
 	return combined_digits, confidence
 
 
+# @func: 将 cluster 之后的所有区域按照 confidence 的值从小到大排序
+# @param: digits -- 合并之后的可能存在数字的区域
+#		  confidence -- 重合率，每个元素与 digits 的每个元素对应。
+#						重合率越高代表对应的 digit 区域合并了越多的矩阵
+#		  max_num -- 允许存在的最大数字个数
+# @return: 出现概率最大的几个（不大于max_num个）数字区域
+def sortByConfidence(digits, confidence, max_num):
+	# 按照 confidence 的值从小到大排序
+	# 按照实验结果来看，从小到大的排序确实能输出更精确的结果
+	for i in range(len(digits)):
+		for j in range(len(digits)):
+			if confidence[j] < confidence[i]:
+				digits[i], digits[j] = digits[j], digits[i]
+				confidence[i], confidence[j] = confidence[j], confidence[i]
+	length = min(len(digits), max_num)
+	
+	ret_digits = [digits[i] for i in range(length)]
+	return ret_digits
 
 
-def getAllDigitArea(cascade_list, img, enlarge):
-	global imNo
+
+def getDigitArea(cascade_list, img, enlarge, ratios):
 	tmp_copy = img
 	img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 	img_scale = []
@@ -178,40 +185,31 @@ def getAllDigitArea(cascade_list, img, enlarge):
 		for i in range(10):
 			#digits = cascade_list[i].detectMultiScale(img_scale[k], 1.1, 3, 
 			#	0|cv2.CV_HAAR_SCALE_IMAGE, [20,30], [400, 600])
-			digits = cascade_list[i].detectMultiScale(img_scale[k], 1.1, 3, 
-				0|cv2.CASCADE_SCALE_IMAGE, (20,30), (400, 600))
+			digits = cascade_list[i].detectMultiScale(img_scale[k], 1.1, 3,
+				0, (20,30), (400, 600))
 
 			for x,y,width,height in digits:
-			#for j in range(len(digits)):
 				curr_x = x // ratios[k]*enlarge
-				curr_y = y // enlarge  	# y 轴没进行 ratio 缩放
+				curr_y = y // enlarge  		# y 轴没进行 ratio 缩放
 				curr_width = width // (ratios[k]*enlarge);
 				curr_height = height // enlarge;
-				all_digits.append(Box(int(curr_x), int(curr_y), int(curr_width), int(curr_height)))
-				#print(curr_x, curr_y, curr_width, curr_height)
-	#all_digits = sorted(all_digits)
+				all_digits.append(Box(int(curr_x), int(curr_y), \
+									int(curr_width), int(curr_height)))
+	#　按每个　area　的 x　轴的中心点排序
 	all_digits = sorted(all_digits, key=lambda each_digit : (each_digit.left+each_digit.width/2))
-	items = [(b.left, b.top, b.width, b.height) for b in all_digits]
-	print(items)
-	print('all_digits length: '+str(len(all_digits)))
 
 	if(len(all_digits) > 0):
 		filter_digits = area_filter(all_digits)
-		print('filter length: '+str(len(filter_digits)))
 		cluster_digit, confidence = cluster(filter_digits)
-		print('cluster length: '+str(len(cluster_digit)))
-		imNo = imNo+1
-		write(cluster_digit, confidence, imNo)
+		ret_digits = sortByConfidence(cluster_digit, confidence, MAX_NUM)
+		return ret_digits
 
 	else:
-		print('imNo: ', imNo)
-		print('Size: ', img.shape[0], img.shape[1])
-
-		# Have probability to cause infinite loop
-		getAllDigitArea(cascade_list, tmp_copy, 2*enlarge)
+		# Have probability to cause infinite recursion
+		return getDigitArea(cascade_list, tmp_copy, 2*enlarge, ratios)
 
 
-def localize(filepath):
+def localize(filepath, ratios):
 	digit_cascade = []
 	for i in range(10):
 		filename = base+str(i)+'/cascade.xml'
@@ -219,9 +217,7 @@ def localize(filepath):
 	print('digit_cascade constructed.')
 
 	img = cv2.imread(filepath)
-	getAllDigitArea(digit_cascade, img, 1)
-
-
+	return getDigitArea(digit_cascade, img, 1, ratios)
 
 
 def main():
@@ -240,8 +236,9 @@ def main():
 		print('Being localize...')
 		filename = address + str(i) + '.png'
 		img = cv2.imread(filename, 1)
-		getAllDigitArea(digit_cascade, img, 1)
+		ret_digit = getDigitArea(digit_cascade, img, 1, RATIOS)
+		write(ret_digit, i+1, outputFile)
 
 
-#if __name__ == '__main__':
-#	main()
+if __name__ == '__main__':
+	main()

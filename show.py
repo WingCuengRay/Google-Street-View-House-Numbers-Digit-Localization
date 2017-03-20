@@ -109,4 +109,4 @@ def main_exact_img():
 
 if __name__ == '__main__':
 	#main()
-	main_exact_img()
+	#main_exact_img()
