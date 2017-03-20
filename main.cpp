@@ -40,7 +40,8 @@ public:
 
     vector <float> confidence;
 
-    detect(String add="C:/Users/student/Desktop/adc/svhn/Google-Street-View-House-Numbers/cascades/cascade")
+    //　构造阶段主要读取了 10 个 classifier 的 cascade 参数
+    detect(String add="/home/ray/Code/Google-Street-View-House-Numbers-Digit-Localization/cascades/cascade")
     {
         ratios[0] = 1;
         ratios[1] = 2;
@@ -83,11 +84,20 @@ public:
             sumsq+=area[i]*area[i];
         }
         pair <float, float> musigma;
-        musigma.first = sum/len;
-        musigma.second = sqrt((sumsq/len)-(musigma.first*musigma.first));
+        musigma.first = sum/len;        // mu:　均值
+        musigma.second = sqrt((sumsq/len)-(musigma.first*musigma.first));   // sigma: 类方差，与方差公式不同
+        //cout << musigma.first << ' ' << musigma.second << endl;
         return musigma;
     }
 
+    /**
+    ** @func: 使用正态分布将处于边缘的 height*width 的区域过滤掉
+    ** @param:
+    **      all_digits -- vector<Rect>，保存了所有检测到的数字区域的坐标（包括 false positive）
+    **      filtered -- vector<Rct>，空 vector，用于返回过滤后的区域坐标
+    **      dist -- float，相当于正态分布的一个概率阈值
+    **
+    **/
     void areafilter(vector<Rect> &all_digits, vector<Rect> &filtered, float dist = 0.75)
     {
         area.clear();
@@ -102,6 +112,7 @@ public:
         for(int i=0; i<all_digits.size(); i++)
         {
             //discard the bboxs thats don't lie within dist*sigma of mean
+            // 根据 height * width 的乘积舍弃了一些处于正态分布边缘的 area
             if(abs(musigma.first-(all_digits[i].height*all_digits[i].width)) <= (dist*musigma.second+25))
             {
                 filtered.push_back(all_digits[i]);
@@ -110,17 +121,28 @@ public:
     }
 
 
+    /**
+    ** @func: 将所有图片按照重叠程度合并（聚簇）
+    ** @param: 
+    **      all_digits -- vector<Rect>,这里的命名有误导嫌疑，这个 vector 存放的区域是经过 filter 的区域，而不是 all_digits
+    **      combined   -- vector<Rect>,　合并完后的矩阵坐标
+    ** @pre-condition: all_digits yi an zhao juzhen zhongxin chongxiao daoda paixu
+    **/
     void cluster(vector<Rect> &all_digits, vector<Rect> &combined)
     {
+        // cc represent the count of overlapped rectangle in one cluster
         float cc = 1;
         Rect overlap, temp(all_digits[0]);
         for(int i=1; i<all_digits.size(); i++)
         {
+            //The intersection of two area
             overlap = all_digits[i] & temp ;
             //clustered rectangle size = mean of all bbox in the cluster
+            // area() == width*height
             if( overlap.area() > 0.5*temp.area() || overlap.area() > 0.5*all_digits[i].area())
             {
                 //calculation of running mean
+                //take the central point of all overlaped rectangle across x and y axis
                 temp = Rect((temp.tl()*cc + all_digits[i].tl())*(1/(cc+1)),
                             (temp.br()*cc + all_digits[i].br())*(1/(cc+1)));
                 cc++;
@@ -147,46 +169,51 @@ public:
         temp_copy = image.clone();
         cvtColor( image, image, CV_BGR2GRAY );
 
-        //running for k different scales, as initialized in the constructor
+        // ratio[] 定义了 multi-scale 中不同的缩放比例，这里只使用了两个缩放比例：１和２
         for(int k=0; k<2; k++)
         {
-            //resize image to required scale
+            // x　轴缩放 ratios[k]*enlarge 倍，　y 轴缩放 enlarge 倍
             resize(image,img[k],Size(0,0),ratios[k]*enlarge,enlarge);
-            //equalizeHist( img[k], img[k] );//Giving lots of false positives
+
+
+            //　将检测到的 10　个数字的区域全部保存在 all_digit 中
             for(int i=0; i<10; i++)
             {
+                // digits 是由　Rect 组成的 vector
+                // digits 用于返回检测到的物体的坐标
                 digit_cascade[i].detectMultiScale( img[k], digits, 1.1, 3, 0|CV_HAAR_SCALE_IMAGE, Size(20, 30), Size(400,600) );
-                //cout<<i<<"'s detected: "<<digits.size()<<endl;
+
                 ostringstream ss;
                 ss<<i;
                 for( int j = 0; j < digits.size(); j++ )
                 {
-                    //rescaling the bbox dimension to fit original image
+                    //将缩放后产生的坐标转换为原尺寸坐标
                     curr_x = digits[j].x/(ratios[k]*enlarge);
                     curr_y = digits[j].y/enlarge;
                     curr_width = digits[j].width/(enlarge*ratios[k]);
                     curr_height = digits[j].height/enlarge;
+                    //cout << curr_x << ' ' << curr_y << ' ' << curr_width << ' ' << curr_height << endl;
 
-                    //storing bbox results from all scales
+                    //检测到所有区域的坐标都保存在 all_digits (vector)　中
                     all_digits.push_back(Rect(curr_x, curr_y, curr_width, curr_height));
 
+                    //　rectangle() 函数用于画矩形
                     rectangle(result, Rect(curr_x, curr_y, curr_width, curr_height), Scalar(255,255,0), 1, 8, 0);
                     putText(result, ss.str() , Point(curr_x, curr_y+curr_height),  CV_FONT_HERSHEY_PLAIN, 1.0, (255,0,0) );
                 }
                 digits.clear();
             }
         }
+        //　根据矩形区域的 x　轴中心坐标排序
         sort(all_digits.begin(), all_digits.end(), sort_condition());
-        //cout<<"bbox: "<<all_digits.size()<<endl;
+        //cout << "all_digits length:" << all_digits.size() << endl;
 
         if(all_digits.size()>0)
         {
-            //filter out noisy bbox
             areafilter(all_digits, filtered);
-
-            //cluster filtered bboxs
-            //cout<<"filtered bbox: "<<filtered.size()<<endl;
+            //cout << "filtered length:" << filtered.size() << endl;
             cluster(filtered, combined);
+            //cout << "combined length:" << combined.size() << endl;
 
             //display clustered bbox
             for(int i=0; i<combined.size(); i++)
@@ -218,14 +245,18 @@ public:
         combined.clear();
         confidence.clear();
     }
+
+    /**
+    ** @func: 将经过 filter 和 cluster 的坐标写入文件中
+    **/
     void write()
     {
         int mini = 4;
         Rect temporary;
-        int tempc;
+        int tempc;      
+        // 讲　digit area 按置信度从小到大排序
         for(int i=0; i<combined.size(); i++)
-        {
-
+        { 
             for(int j=0; j<combined.size(); j++)
             {
                 if(confidence[j] < confidence[i])
@@ -242,6 +273,8 @@ public:
         }
         int combinedSize=combined.size();
         out<<imNo<<" "<<std::min(combinedSize, mini);
+
+        // mini 的值代表一张图片数字个数上限为　4
         for(int i =0; i<combined.size(); i++)
         {
             out<<" "<<combined[i].x<<" "<<combined[i].y<<" "<<combined[i].width<<" "<<combined[i].height;//<<" "<<confidence[i];
@@ -266,7 +299,8 @@ int main()
     Mat image, image_truth, frame;
     detect detector;
 
-    string address = "C:/Users/student/Desktop/adc/svhn/train/";
+    string address = "/home/ray/Code/machine-learning/projects/capstone/data/svhn/full/test/";
+    //string address = "C:/Users/student/Desktop/adc/svhn/train/";
     string filename, cas, converted;
     for(int i =1; i<=100; i++)
     {
@@ -278,7 +312,6 @@ int main()
 
         image = imread(filename,1);
         detector.eval(image);
-
         /*int c = waitKey(0);
         if( (char)c == 27 )
         {
